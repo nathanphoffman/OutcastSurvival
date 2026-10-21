@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds survival/zz_survival.pk3: a copy of the 'pit' arena with a new entity
 lump (player start + wave spawners). No map compiler needed."""
-import math, os, random, struct, sys, zipfile
+import math, os, random, re, struct, sys, zipfile
 
 GAME = os.path.expanduser("~/.steam/steam/steamapps/common/Jedi Outcast/GameData/base")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "survival")
@@ -158,6 +158,20 @@ def build_ents(orig):
     start = dict(classname="info_player_start", origin="%d %d %d" % (CX, CY, FLOOR), angle=0)
     return "".join(keep) + fmt(start) + "".join(fmt(e) for e in ents)
 
+def build_menu():
+    """Main menu: the NEW button becomes START GAME and loads the survival map."""
+    with zipfile.ZipFile(os.path.join(GAME, "assets2.pk3")) as z:
+        m = z.read("ui/main.menu").decode("latin1")
+    a = re.search(r"name\s+newgamebutton\s", m).start()
+    b = m.index("LOAD", a)
+    btn = m[a:b]
+    for pat, rep in ((r"@MENUS1_NEW\b", '"START GAME"'),
+                     (r"@MENUS1_START_A_NEW_GAME\b", '"Start the survival map"'),
+                     (r"open(\s+)newgameMenu", r'exec\1"devmap %s"' % MAP)):
+        btn, n = re.subn(pat, rep, btn)
+        assert n == 1, pat
+    return (m[:a] + btn + m[b:]).encode("latin1")
+
 def main():
     with zipfile.ZipFile(os.path.join(GAME, "assets0.pk3")) as z:
         bsp = bytearray(z.read("maps/pit.bsp"))
@@ -169,6 +183,7 @@ def main():
     pk3 = os.path.join(OUT, "zz_survival.pk3")
     with zipfile.ZipFile(pk3, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("maps/%s.bsp" % MAP, bytes(bsp))
+        z.writestr("ui/main.menu", build_menu())
         for path, data in SCRIPTS.items():
             z.writestr(path, data)
     print("seed", SEED, "- entities:", len(ents), "(limit ~1000)")
