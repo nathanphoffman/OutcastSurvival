@@ -1,0 +1,4 @@
+# built by build.py
+survival/*.pk3
+# backup of the folder the game auto-created
+old_survival_dir/
