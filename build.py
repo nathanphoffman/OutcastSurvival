@@ -116,6 +116,11 @@ POINTS = 100
 TOTAL_KILLS = sum(3 + n // 2 for n in range(1, WAVES + 1))
 SCRIPTS["scripts/zzsurv/init.ibi"] = ibi([(k, START.get(p, 0)) for p, k in POWERS])
 
+# Enemy personalities (handled by the patched trooper AI in openjk/codeJK2/game/AI_Stormtrooper.cpp):
+# p_rusher charges you, p_sniper holds long range and backs off / repositions, p_coward skirmishes and bolts when you get close.
+PERSONALITIES = ["p_rusher", "p_sniper", "p_rusher", "p_coward", "p_sniper", "p_rusher", "p_coward"]
+personality = lambda n, i: PERSONALITIES[(i + n) % len(PERSONALITIES)]
+
 interval = lambda n: round((30 + 4 * n) / 3)   # seconds from wave n starting to wave n+1 starting
 
 for n in range(1, WAVES + 1):
@@ -126,11 +131,13 @@ for n in range(1, WAVES + 1):
         for i in range(cnt):
             kv = dict(target="surv1") if i == 0 else {}
             kv["deathscript"] = "zzsurv/kill"   # first spawn starts the wave clock
+            kv["NPC_targetname"] = personality(n, i)
             ent(classname="NPC_Stormtrooper", origin=pos(i, cnt, n), angle=0, **kv)
     else:
         for i in range(cnt):
             ent(classname="NPC_spawner", NPC_type=types[i % len(types)], origin=pos(i, cnt, n),
-                targetname="surv%dgo%d" % (n, i // 2), angle=0, deathscript="zzsurv/kill")
+                targetname="surv%dgo%d" % (n, i // 2), angle=0, deathscript="zzsurv/kill",
+                NPC_targetname=personality(n, i))
         ent(classname="target_print", targetname="surv%d" % n, message="Wave %d" % n)
         for g in range((cnt + 1) // 2):
             ent(classname="target_delay", targetname="surv%d" % n, wait=round(g * 2 * STAGGER + 0.1, 2),

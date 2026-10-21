@@ -14,8 +14,9 @@ Layout (z up, units are game units; player is 56 tall):
 #    rect_along (flat bridge), ramp (slope), convex (any point set). Units: player is 56 tall, walks up ~18 high
 #    steps, slopes steeper than ~45 degrees are not walkable. Without force jump a player clears ~120-150 unit gaps,
 #    so connect platforms with bridges/ramps rather than relying on jumps.
-#  - A new walkable area needs BOTH: waypoint(...) calls every ~100 units (enemy pathfinding; no waypoints = enemies
-#    won't walk there) and, if enemies should appear there, an entry in SPAWNS. Don't put waypoints inside solid brushes.
+#  - A new walkable area needs: waypoints every ~100 units joined with chain()/link() (JK2 only paths along explicit links,
+#    max 4 outgoing per waypoint is handled for you), an invisible fence() along its open edges (otherwise enemies cut
+#    corners and fall off), and, if enemies should appear there, an entry in SPAWNS. Don't put waypoints inside solid brushes.
 #    The game recalculates its .nav file itself on first load after each rebuild.
 #  - Texture names in TEX are written without the "textures/" prefix in the .map (convex() strips it); the compiler adds it.
 #  - The sky box (6 brushes at the top of build()) must stay sealed or q3map2 reports a leak and build.py stops.
@@ -37,6 +38,7 @@ TEX = dict(
     sky="textures/bespin/sky",
     trigger="textures/system/trigger",
     clip="textures/system/caulk",
+    npcclip="textures/system/blocknpc",     # invisible, blocks NPCs but not the player
 )
 
 sub = lambda a, b: (a[0] - b[0], a[1] - b[1], a[2] - b[2])
@@ -131,6 +133,41 @@ def ramp(p, q, width, z_low, z_high, thick, top, side=None, bottom=None):
                 (q[0] + s * nx, q[1] + s * ny, z_high), (q[0] + s * nx, q[1] + s * ny, z_low - thick)]
     convex(pts, top, side, bottom)
 
+def fence(poly, walk_inside, is_open, z0=-16, z1=160, thick=24, step=10):
+    """Invisible NPC-only wall along the edges of a convex polygon (list of (x, y)), so enemies can't walk or
+    cut corners off the edge. walk_inside: the floor is inside the polygon (else outside it).
+    is_open(x, y) marks stretches that must stay open (where a bridge or ramp joins)."""
+    cx = sum(p[0] for p in poly) / len(poly)
+    cy = sum(p[1] for p in poly) / len(poly)
+    n = len(poly)
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        ln = math.hypot(b[0] - a[0], b[1] - a[1])
+        ux, uy = (b[0] - a[0]) / ln, (b[1] - a[1]) / ln
+        nx, ny = uy, -ux                                   # a normal of the edge
+        mx, my = (a[0] + b[0]) / 2 - cx, (a[1] + b[1]) / 2 - cy
+        if nx * mx + ny * my < 0:
+            nx, ny = -nx, -ny                              # make it point away from the polygon's centre
+        if not walk_inside:
+            nx, ny = -nx, -ny                              # wall goes on the far side from the floor
+        steps = max(1, int(ln // step))
+        runs, start = [], None
+        for k in range(steps + 1):
+            t = k * ln / steps
+            closed = not is_open(a[0] + ux * t, a[1] + uy * t)
+            if closed and start is None:
+                start = t
+            if (not closed or k == steps) and start is not None:
+                end = t if closed else t - ln / steps
+                if end > start:
+                    runs.append((start, end))
+                start = None
+        for t0, t1 in runs:
+            p = (a[0] + ux * t0, a[1] + uy * t0)
+            q = (a[0] + ux * t1, a[1] + uy * t1)
+            prism([p, q, (q[0] + nx * thick, q[1] + ny * thick), (p[0] + nx * thick, p[1] + ny * thick)],
+                  z0, z1, TEX["npcclip"], TEX["npcclip"], TEX["npcclip"])
+
 def polar(r, deg, z=0):
     a = math.radians(deg)
     return (round(r * math.cos(a)), round(r * math.sin(a)), z)
@@ -138,8 +175,22 @@ def polar(r, deg, z=0):
 def light(origin, intensity, color="1 1 1"):
     entities.append(dict(classname="light", origin="%d %d %d" % origin, light=intensity, _color=color))
 
-def waypoint(p, tag=None):
-    waypoints.append((round(p[0]), round(p[1]), round(p[2]) + 24))
+WP_LIFT = 28                     # waypoints float this far above the surface they mark
+wp_links = []                    # (a, b) waypoint index pairs; the game only paths along explicit links
+
+def waypoint(p):
+    waypoints.append((round(p[0]), round(p[1]), round(p[2]) + WP_LIFT))
+    return len(waypoints) - 1
+
+def link(a, b):
+    wp_links.append((a, b))
+
+def chain(points):
+    """Waypoints along a path, each linked to the next. Returns their indices."""
+    idx = [waypoint(p) for p in points]
+    for a, b in zip(idx, idx[1:]):
+        link(a, b)
+    return idx
 
 # ----------------------------------------------------------------------------------------------
 SKY_Z0, SKY_Z1, SKY_XY = -3400, 2800, 3200
@@ -171,11 +222,13 @@ def build():
 
     # --- hub deck around the core ---
     ring(HUB_R0 - 4, HUB_R1, TOP - THICK, TOP, 16, TEX["deck"], TEX["side"], TEX["under"])
+    hub = [waypoint(polar(300, 22.5 + 45 * i)) for i in range(8)]
     for i in range(8):
-        waypoint(polar(300, 22.5 + 45 * i))
+        link(hub[i], hub[(i + 1) % 8])
     # upper collar on the core
     ring(CORE_R - 4, CORE_R + 90, 540, 580, 16, TEX["deck"], TEX["side"], TEX["under"])
 
+    spokes = []
     # --- four cardinal platforms + spokes to the hub, bridges out to the rim ---
     for k in range(4):
         ang = 90 * k
@@ -185,16 +238,17 @@ def build():
         rect_along(polar(HUB_R1 - 20, ang), polar(800 - 190, ang), 150, TOP - 40, TOP, TEX["deck"], TEX["side"], TEX["under"])
         # bridge from platform out to the rim
         rect_along(polar(800 + 190, ang), polar(RIM_R0 + 20, ang), 150, TOP - 40, TOP, TEX["deck"], TEX["side"], TEX["under"])
-        for r in (480, 560, 640, 720):
-            waypoint(polar(r, ang))
-        for r in (800, 880, 960, 1040, 1120, 1200, 1280):
-            waypoint(polar(r, ang))
-        for da in (-1, 1):
-            waypoint(polar(800, ang + da * 14))
+        spoke = chain([polar(r, ang) for r in range(480, 1281, 80)])   # hub -> platform (r=800 is index 4) -> rim
+        link(hub[(2 * k - 1) % 8], spoke[0])        # hub waypoints either side of this spoke
+        link(hub[(2 * k) % 8], spoke[0])
+        for da in (-14, 14):                        # corners of the platform
+            link(spoke[4], waypoint(polar(800, ang + da)))
+        spokes.append(spoke)
         SPAWNS.append(tuple(round(v) for v in polar(800, ang, TOP + 24)))
         for rr in (800, 1120):   # lights over each platform/bridge
             light(polar(rr, ang, 260), 700, "0.8 0.9 1")
 
+    raised = []
     # --- raised diagonal platforms, reached by ramps from the rim ---
     for k in range(4):
         ang = 45 + 90 * k
@@ -202,21 +256,26 @@ def build():
         prism(poly_pts(c[0], c[1], 190, 8, math.radians(22.5 + ang)), RAISED - THICK, RAISED, TEX["floor"], TEX["side"], TEX["under"])
         # ramp from the rim inward to the platform edge
         ramp(polar(RIM_R0 + 20, ang), polar(780 + 160, ang), 190, TOP, RAISED, 40, TEX["deck"], TEX["side"], TEX["under"])
-        for r in (780, 880):
-            waypoint(polar(r, ang, RAISED))
-        for r in (1000, 1100, 1200, 1300):
-            waypoint(polar(r, ang, RAISED * (1300 - r) / (1300 - 940) if r > 940 else RAISED))
+        surface = lambda r: max(0, min(RAISED, RAISED * (RIM_R0 + 20 - r) / (RIM_R0 + 20 - (780 + 160))))   # ramp height at radius r
+        raised.append(chain([polar(r, ang, surface(r)) for r in (1300, 1200, 1100, 1000, 940, 880, 780)]))
         SPAWNS.append(tuple(round(v) for v in polar(780, ang, RAISED + 24)))
         light(polar(780, ang, RAISED + 260), 700, "1 0.85 0.7")
 
     # --- outer rim: the big flat exterior ---
     ring(RIM_R0, RIM_R1, TOP - THICK, TOP, 32, TEX["rim"], TEX["side"], TEX["under"])
-    for rr in (1400, 1700, 1950):
-        for i in range(24):
-            ang = 15 * i + (7.5 if rr == 1700 or rr == 1950 else 0)
-            waypoint(polar(rr, ang))
+    r1 = [waypoint(polar(1400, 15 * i)) for i in range(24)]
+    r2 = [waypoint(polar(1700, 15 * i + 7.5)) for i in range(24)]
+    r3 = [waypoint(polar(1950, 15 * i + 7.5)) for i in range(24)]
+    for i in range(24):
+        j = (i + 1) % 24
+        for ring_ in (r1, r2, r3):
+            link(ring_[i], ring_[j])
+        link(r1[i], r2[i]); link(r1[j], r2[i]); link(r2[i], r3[i])
+    for k in range(4):   # bridges and ramps meet the inner rim waypoint at their angle
+        link(spokes[k][-1], r1[6 * k])
+        link(raised[k][0], r1[6 * k + 3])
     for i in range(16):
-        SPAWNS.append(tuple(round(v) for v in polar(1750 if i % 2 else 1950, 22.5 * i, TOP + 24)))
+        SPAWNS.append(tuple(round(v) for v in polar(1750 if i % 2 else 1950, 22.5 * i + 11.25, TOP + 24)))
         light(polar(1700, 22.5 * i, 300), 800, "1 1 0.95")
     # corner pylons on the rim
     for k in range(4):
@@ -224,6 +283,43 @@ def build():
         box(c[0] - 70, c[1] - 70, TOP, c[0] + 70, c[1] + 70, 1100, TEX["pylon"], TEX["pylon"], TEX["pylon"])
         prism(poly_pts(c[0], c[1], 85, 8), 1100, 1140, TEX["glow"], TEX["glow"], TEX["glow"])
         light((c[0], c[1], 1180), 1200, "0.5 0.75 1")
+
+    # --- invisible NPC fences along every edge, open where bridges/ramps join ---
+    def corridor(ang, half, ranges):
+        dx, dy = math.cos(math.radians(ang)), math.sin(math.radians(ang))
+        def inside(x, y):
+            along, perp = x * dx + y * dy, abs(-x * dy + y * dx)
+            return perp < half + 12 and any(lo <= along <= hi for lo, hi in ranges)
+        return inside
+    corridors = [corridor(90 * k, 75, [(370, 620), (980, 1330)]) for k in range(4)] + \
+                [corridor(45 + 90 * k, 95, [(930, 1330)]) for k in range(4)]
+    is_open = lambda x, y: any(c(x, y) for c in corridors)
+    fence(poly_pts(0, 0, HUB_R1, 16), True, is_open)
+    fence(poly_pts(0, 0, RIM_R0, 32), False, is_open)
+    fence(poly_pts(0, 0, RIM_R1, 32), True, is_open)
+    for k in range(4):
+        ang = 90 * k
+        c = polar(800, ang)
+        fence(poly_pts(c[0], c[1], 230, 8, math.radians(22.5 + ang)), True, is_open)
+        for side in (-1, 1):   # long sides of the spoke (hub to platform) and the bridge (platform to rim)
+            for r0, r1 in ((HUB_R1, 800 - 212), (800 + 212, RIM_R0)):
+                a = math.radians(ang)
+                px, py = -math.sin(a) * 75 * side, math.cos(a) * 75 * side
+                p = (r0 * math.cos(a) + px, r0 * math.sin(a) + py)
+                q = (r1 * math.cos(a) + px, r1 * math.sin(a) + py)
+                ox, oy = px / 75 * 12, py / 75 * 12                      # push the wall outward off the walkway
+                prism([p, q, (q[0] + ox, q[1] + oy), (p[0] + ox, p[1] + oy)], -16, 160, TEX["npcclip"], TEX["npcclip"], TEX["npcclip"])
+    for k in range(4):
+        ang = 45 + 90 * k
+        c = polar(780, ang)
+        fence(poly_pts(c[0], c[1], 190, 8, math.radians(22.5 + ang)), True, is_open, RAISED - 16, RAISED + 160)
+        a = math.radians(ang)
+        for side in (-1, 1):   # ramp sides
+            px, py = -math.sin(a) * 95 * side, math.cos(a) * 95 * side
+            p = (950 * math.cos(a) + px, 950 * math.sin(a) + py)
+            q = (RIM_R0 * math.cos(a) + px, RIM_R0 * math.sin(a) + py)
+            ox, oy = px / 95 * 12, py / 95 * 12
+            prism([p, q, (q[0] + ox, q[1] + oy), (p[0] + ox, p[1] + oy)], -16, RAISED + 160, TEX["npcclip"], TEX["npcclip"], TEX["npcclip"])
 
     # --- hurt volume far below the platforms (the chasm) ---
     box(-s, -s, -2000, s, s, -1900, TEX["trigger"], TEX["trigger"], TEX["trigger"])
@@ -245,8 +341,16 @@ def to_map(extra_entities=()):
         if "_brush" in e:
             out.append(e["_brush"])
         out.append('}')
-    for p in waypoints:
-        out.append('{\n"classname" "waypoint"\n"origin" "%d %d %d"\n}' % p)
+    # each undirected link is stored on whichever end has a free target slot (max 4 per waypoint)
+    slots = [[] for _ in waypoints]
+    for a, b in wp_links:
+        src, dst = (a, b) if len(slots[a]) <= len(slots[b]) else (b, a)
+        assert len(slots[src]) < 4, "waypoint %d has too many links" % src
+        slots[src].append(dst)
+    for i, p in enumerate(waypoints):
+        keys = ["target", "target2", "target3", "target4"]
+        kv = "".join('"%s" "wp%d"\n' % (keys[n], d) for n, d in enumerate(slots[i]))
+        out.append('{\n"classname" "waypoint"\n"origin" "%d %d %d"\n"targetname" "wp%d"\n%s}' % (p + (i, kv)))
     return "\n".join(out) + "\n"
 
 build()

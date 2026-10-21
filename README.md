@@ -67,3 +67,16 @@ element from map entities). Costs ~2 entities per kill, so keep an eye on the en
   (needs libxml2-dev and libassimp-dev headers; we unpacked the .debs locally since there is no sudo).
 - AI navigation (.nav) is recalculated by the game on the first load after each rebuild (a few seconds).
 - Falling below the platforms hits a `trigger_hurt` and kills instantly.
+
+## Enemy personalities
+Enemies are tagged in `build.py` (`PERSONALITIES`, via the NPC_targetname key) and handled by a patch to the trooper AI in
+`openjk/codeJK2/game/AI_Stormtrooper.cpp` (search `ST_PERS_`), so they only apply with the self-built engine (`./play_open.sh`);
+under Steam (`run.sh`) the tags are ignored and enemies use the stock AI. Tagged troopers always know where you are.
+- `p_rusher`: charges you along the waypoint paths and stops when on top of you.
+- `p_sniper`: holds 650-1300 units away with a line of sight; backs off if you close in; moves again when you leave its view.
+- `p_coward`: skirmishes at 450-900; bolts away for a few seconds when you get within 450, then returns.
+- Only trooper-type NPCs (stormtrooper, swamptrooper, officer...) use these; Reborn/Jedi types have their own AI.
+- To tune: change the numbers in `ST_PersonalityMove`, then `cd openjk/build && ninja install`.
+- Navigation: JK2 only paths along waypoints that are explicitly linked (target keys), so `mapgen.py` links its waypoints itself
+  (`link`/`chain`). The AI's straight-line shortcut ignores floors, so enemies would cut corners off the edges; `mapgen.py` adds
+  invisible NPC-only fences (`fence`, texture `blocknpc`) along every edge. Add both when you add walkable areas.
