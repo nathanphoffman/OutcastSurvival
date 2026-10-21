@@ -23,7 +23,7 @@ Rebuilds the map with a new random seed, then launches the game once with `+set 
 launches from Steam are unaffected.
 
 ## How waves work
-- Wave 1 (4 stormtroopers) spawns on map load; the first one starts the wave clock.
+- Wave 1 (stormtroopers plus one BattleDroid) spawns on map load; the first one starts the wave clock.
 - Each later wave starts on a timer ((30 + 4n)/3 seconds after the previous wave started), whether or
   not you cleared the last one. Enemies spawn ~0.6s apart on a ring around the arena.
 - 20 waves, 160 enemies total (3 + n/2 per wave). Enemy types per wave and timings are at the top of `build.py`.
@@ -80,3 +80,15 @@ under Steam (`run.sh`) the tags are ignored and enemies use the stock AI. Tagged
 - Navigation: JK2 only paths along waypoints that are explicitly linked (target keys), so `mapgen.py` links its waypoints itself
   (`link`/`chain`). The AI's straight-line shortcut ignores floors, so enemies would cut corners off the edges; `mapgen.py` adds
   invisible NPC-only fences (`fence`, texture `blocknpc`) along every edge. Add both when you add walkable areas.
+
+## BattleDroid (wave 1 robot)
+A heavy robot with its own model, built by `droidgen.py` (called from `build.py`; output cached in `tools/build/droid/`).
+- Model: boxes/cylinders/spheres skinned onto the game's humanoid skeleton by copying bone weights from the stormtrooper
+  model, plus a generated texture, glow map, shader, skin and `ext_data/battledroid.npc`. Edit `build_parts()` to reshape it.
+- AI: `openjk/codeJK2/game/AI_BattleDroid.cpp` (new class `CLASS_BATTLEDROID`, entity `NPC_BattleDroid`), engine build only.
+  - Twin arm cannons fire bursts (left rapid bolts, right heavy plasma) while it stands still.
+  - Shoulder pods fire a salvo of homing rockets at long range.
+  - Close range: ground slam that damages and knocks you down.
+  - Armor plating, never knocked back; below 40% health it goes into overdrive (faster, sparking).
+  - On death the reactor overloads for ~2 seconds, then explodes and hurts anything nearby.
+- Tuning numbers (health in `droidgen.py` NPC_TXT; everything else at the top of `AI_BattleDroid.cpp`), then `cd openjk/build && ninja install`.

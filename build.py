@@ -37,6 +37,7 @@ def ent(**kv): ents.append(kv)
 
 if CHASM:
     import mapgen
+import droidgen
 
 def pos(i, n, w):
     if CHASM:   # spread spawns across the rim/platforms, rotating the start point each wave
@@ -113,7 +114,8 @@ def script(*blocks): return b"IBI\0" + struct.pack("<f", 1.57) + b"".join(blocks
 IBI_USE = 30
 SCRIPTS["scripts/zzsurv/kill.ibi"] = script(_blk(IBI_USE, "kill"))   # deathscript: pokes every "kill" counter
 POINTS = 100
-TOTAL_KILLS = sum(3 + n // 2 for n in range(1, WAVES + 1))
+EXTRA_UNITS = 1                     # the BattleDroid in wave 1 (not counted in size(n))
+TOTAL_KILLS = sum(3 + n // 2 for n in range(1, WAVES + 1)) + EXTRA_UNITS
 SCRIPTS["scripts/zzsurv/init.ibi"] = ibi([(k, START.get(p, 0)) for p, k in POWERS])
 
 # Enemy personalities (handled by the patched trooper AI in openjk/codeJK2/game/AI_Stormtrooper.cpp):
@@ -133,6 +135,8 @@ for n in range(1, WAVES + 1):
             kv["deathscript"] = "zzsurv/kill"   # first spawn starts the wave clock
             kv["NPC_targetname"] = personality(n, i)
             ent(classname="NPC_Stormtrooper", origin=pos(i, cnt, n), angle=0, **kv)
+        # wave 1 also gets a BattleDroid (heavy robot, see droidgen.py / AI_BattleDroid.cpp); its spawner class sets the NPC type
+        ent(classname="NPC_BattleDroid", origin=pos(cnt, cnt + 1, n), angle=0, deathscript="zzsurv/kill")
     else:
         for i in range(cnt):
             ent(classname="NPC_spawner", NPC_type=types[i % len(types)], origin=pos(i, cnt, n),
@@ -227,7 +231,9 @@ def main():
         z.writestr("ui/main.menu", build_menu())
         for path, data in SCRIPTS.items():
             z.writestr(path, data)
+        for path, data in droidgen.files(GAME).items():   # BattleDroid model, skin, shader, npc definition
+            z.writestr(path, data)
     print("seed", SEED, "- entities:", len(ents), "(limit ~1000)")
-    print("wrote", pk3, "-", sum(size(n) for n in range(1, WAVES + 1)), "enemies over", WAVES, "waves")
+    print("wrote", pk3, "-", sum(size(n) for n in range(1, WAVES + 1)) + EXTRA_UNITS, "enemies over", WAVES, "waves")
 
 main()
