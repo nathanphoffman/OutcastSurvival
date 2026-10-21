@@ -7,3 +7,7 @@ openjk/
 dist/
 game/
 home/
+# map compiler checkout, its helper libs and scratch output
+tools/netradiant/
+tools/libs/
+tools/build/

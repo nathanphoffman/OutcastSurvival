@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Builds survival/zz_survival.pk3: a copy of the 'pit' arena with a new entity
 lump (player start + wave spawners). No map compiler needed."""
-import math, os, random, re, struct, sys, zipfile
+import math, os, random, re, struct, subprocess, sys, zipfile
 
 GAME = os.path.expanduser("~/.steam/steam/steamapps/common/Jedi Outcast/GameData/base")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "survival")
-MAP = "survival_pit"
+MAP = os.environ.get("SURV_MAP", "survival_chasm")   # or survival_pit (the original arena)
+CHASM = MAP == "survival_chasm"
+HERE = os.path.dirname(os.path.abspath(__file__))
 CX, CY, FLOOR = 672, -1088, 16     # arena center, spawn height (floor is z=-8)
 RING = 190                         # spawn ring radius (floor waypoints reach ~200)
 
@@ -33,7 +35,14 @@ STAGGER = 0.6                       # seconds between spawns within a wave (spaw
 ents = []
 def ent(**kv): ents.append(kv)
 
+if CHASM:
+    import mapgen
+
 def pos(i, n, w):
+    if CHASM:   # spread spawns across the rim/platforms, rotating the start point each wave
+        sp = mapgen.SPAWNS
+        x, y, z = sp[(i * 3 + w * 5) % len(sp)]
+        return "%d %d %d" % (x, y, z)
     a = 2 * math.pi * (i / n) + w * 0.7
     return "%d %d %d" % (CX + RING * math.cos(a), CY + RING * math.sin(a), FLOOR)
 
@@ -92,6 +101,9 @@ def ibi(sets):
 
 SCRIPTS = {}   # pk3 path -> bytes
 def rand_spot():
+    if CHASM:
+        x, y, z = rng.choice(mapgen.waypoints)
+        return "%d %d %d" % (x, y, z)
     a, r = rng.uniform(0, 2 * math.pi), rng.uniform(40, 170)
     return "%d %d %d" % (CX + r * math.cos(a), CY + r * math.sin(a), FLOOR)
 
@@ -158,6 +170,25 @@ def build_ents(orig):
     start = dict(classname="info_player_start", origin="%d %d %d" % (CX, CY, FLOOR), angle=0)
     return "".join(keep) + fmt(start) + "".join(fmt(e) for e in ents)
 
+def compile_chasm():
+    """Generate the .map (with the wave entities), run q3map2, return the finished .bsp bytes."""
+    work = os.path.join(HERE, "tools", "build")
+    os.makedirs(work, exist_ok=True)
+    mp = os.path.join(work, MAP + ".map")
+    with open(mp, "w") as f:
+        f.write(mapgen.to_map(ents))
+    q3map2 = os.path.join(HERE, "tools", "netradiant", "install", "q3map2.x86_64")
+    env = dict(os.environ, LD_LIBRARY_PATH=os.path.join(HERE, "tools", "libs"))
+    base = [q3map2, "-game", "jk2", "-fs_basepath", os.path.join(HERE, "game")]
+    for stage in (["-meta"], ["-vis", "-fast"], ["-light", "-fast", "-samplesize", "16", "-bounce", "0"]):
+        r = subprocess.run(base[:1] + [stage[0]] + base[1:] + stage[1:] + [mp], env=env, capture_output=True, text=True)
+        if r.returncode:
+            sys.exit(r.stdout[-2000:] + r.stderr[-2000:])
+        if "leaked" in r.stdout.lower():
+            sys.exit("map leaked (see %s.prt):\n%s" % (mp[:-4], r.stdout[-1500:]))
+    with open(os.path.join(work, MAP + ".bsp"), "rb") as f:
+        return f.read()
+
 def build_menu():
     """Main menu: the NEW button becomes START GAME and loads the survival map."""
     with zipfile.ZipFile(os.path.join(GAME, "assets2.pk3")) as z:
@@ -173,12 +204,15 @@ def build_menu():
     return (m[:a] + btn + m[b:]).encode("latin1")
 
 def main():
-    with zipfile.ZipFile(os.path.join(GAME, "assets0.pk3")) as z:
-        bsp = bytearray(z.read("maps/pit.bsp"))
-    off, ln = struct.unpack_from("<ii", bsp, 8)
-    new = build_ents(bsp[off:off + ln].decode("latin1").rstrip("\0")).encode("latin1") + b"\0"
-    struct.pack_into("<ii", bsp, 8, len(bsp), len(new))   # append new lump at end of file
-    bsp += new
+    if CHASM:
+        bsp = compile_chasm()
+    else:
+        with zipfile.ZipFile(os.path.join(GAME, "assets0.pk3")) as z:
+            bsp = bytearray(z.read("maps/pit.bsp"))
+        off, ln = struct.unpack_from("<ii", bsp, 8)
+        new = build_ents(bsp[off:off + ln].decode("latin1").rstrip("\0")).encode("latin1") + b"\0"
+        struct.pack_into("<ii", bsp, 8, len(bsp), len(new))   # append new lump at end of file
+        bsp += new
     os.makedirs(OUT, exist_ok=True)
     pk3 = os.path.join(OUT, "zz_survival.pk3")
     with zipfile.ZipFile(pk3, "w", zipfile.ZIP_DEFLATED) as z:
