@@ -7,6 +7,21 @@ Layout (z up, units are game units; player is 56 tall):
   - a big flat outer rim (the "exterior") with four corner pylons
   - open chasm below (hurt trigger), sealed by a sky box so it compiles without leaks
 """
+
+# EDITING NOTES (read before changing build())
+#  - Run `python3 build.py` to rebuild (~40s: this file -> .map -> q3map2 -> .bsp -> pk3). Test with ./play_open.sh.
+#  - Everything is convex brushes. Helpers: box, prism (vertical polygon), ring (donut of trapezoids),
+#    rect_along (flat bridge), ramp (slope), convex (any point set). Units: player is 56 tall, walks up ~18 high
+#    steps, slopes steeper than ~45 degrees are not walkable. Without force jump a player clears ~120-150 unit gaps,
+#    so connect platforms with bridges/ramps rather than relying on jumps.
+#  - A new walkable area needs BOTH: waypoint(...) calls every ~100 units (enemy pathfinding; no waypoints = enemies
+#    won't walk there) and, if enemies should appear there, an entry in SPAWNS. Don't put waypoints inside solid brushes.
+#    The game recalculates its .nav file itself on first load after each rebuild.
+#  - Texture names in TEX are written without the "textures/" prefix in the .map (convex() strips it); the compiler adds it.
+#  - The sky box (6 brushes at the top of build()) must stay sealed or q3map2 reports a leak and build.py stops.
+#  - build.py adds the wave/pickup entities (~750) on top; the game's entity limit is ~1000, so keep lights/extras modest.
+#  - The trigger_hurt box at z=-2000 kills anything that falls; keep it below the lowest walkable surface.
+#  - If the map looks wrong, build.py leaves tools/build/survival_chasm.map/.prt for inspection.
 import math
 from itertools import combinations
 
